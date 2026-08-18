@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { createClient } = require('@supabase/supabase-supabase-js');
 const cors = require('cors');
@@ -40,5 +39,3 @@ app.post('/api/clientes', async (req, res) => {
 
 const port = process.env.PORT || 10000;
 app.listen(port, () => console.log(`Servidor en puerto ${port}`));
-
-
