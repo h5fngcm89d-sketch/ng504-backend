@@ -11,15 +11,15 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.get('/', (req, res) => {
-  res.send('Backend NG504 activo y listo');
+  res.send('Backend NG504 activo');
 });
 
-// Guardar cliente con nombres en minúsculas
+// Guardar cliente
 app.post('/api/clientes', async (req, res) => {
   const { nombre, monto, direccion, cobrador_id } = req.body;
   
   const { data, error } = await supabase
-    .from('clientes')
+    .from('Clientes')
     .insert([
       { 
         nombre: nombre, 
@@ -39,4 +39,5 @@ app.post('/api/clientes', async (req, res) => {
 
 const port = process.env.PORT || 10000;
 app.listen(port, () => console.log(`Servidor en puerto ${port}`));
+
 
