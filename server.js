@@ -11,17 +11,16 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.get('/', (req, res) => {
-  res.send('Backend NG504 activo con modulo de cobranza v2');
+  res.send('Backend NG504 activo');
 });
 
 // OBTENER CLIENTES
 app.get('/api/clientes', async (req, res) => {
   try {
     const { data, error } = await supabase.from('Clientes').select('*');
-    if (error) throw error;
+    if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   } catch (err) {
-    console.error('Error clientes:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -48,67 +47,56 @@ app.post('/api/clientes', async (req, res) => {
         }
       ]);
 
-    if (error) throw error;
+    if (error) return res.status(500).json({ error: error.message });
     res.json({ message: 'Cliente registrado', data });
   } catch (err) {
-    console.error('Error al guardar cliente:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// REGISTRAR PAGO
+// REGISTRAR PAGO (Ruta simplificada directa)
 app.post('/api/pagos', async (req, res) => {
   try {
-    const { cliente_id, monto_cobrado, cobrador_id } = req.body;
+    const { cliente_id, monto_cobrado } = req.body;
 
     if (!cliente_id || !monto_cobrado) {
-      return res.status(400).json({ error: 'Faltan datos requeridos (cliente u monto)' });
+      return res.status(400).json({ error: 'Faltan cliente_id o monto_cobrado' });
     }
 
-    // 1. Consultar cliente actual
+    // 1. Traer cliente actual
     const { data: cliente, error: errCliente } = await supabase
       .from('Clientes')
       .select('*')
       .eq('id', cliente_id)
-      .single();
+      .maybeSingle();
 
     if (errCliente || !cliente) {
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
 
-    // Calcular saldo
+    // 2. Calcular saldo
     const totalInicial = Number(cliente.monto) + (Number(cliente.monto) * ((Number(cliente.porcentaje) || 20) / 100));
-    let saldoActual = cliente.saldo_pendiente !== null && cliente.saldo_pendiente !== undefined 
+    const saldoActual = cliente.saldo_pendiente !== null && cliente.saldo_pendiente !== undefined 
       ? Number(cliente.saldo_pendiente) 
       : totalInicial;
 
     const nuevoSaldo = Math.max(0, saldoActual - Number(monto_cobrado));
 
-    // 2. Intentar registrar el pago (si la tabla Pagos existe)
-    try {
-      await supabase.from('Pagos').insert([{ 
-        cliente_id: cliente_id, 
-        monto_cobrado: Number(monto_cobrado), 
-        cobrador_id: String(cobrador_id || 'cobrador') 
-      }]);
-    } catch (e) {
-      console.log('Tabla Pagos opcional con aviso:', e);
-    }
-
-    // 3. Actualizar el saldo en la tabla Clientes
+    // 3. Actualizar en Supabase
     const { error: errUpdate } = await supabase
       .from('Clientes')
       .update({ saldo_pendiente: nuevoSaldo })
       .eq('id', cliente_id);
 
-    if (errUpdate) throw errUpdate;
+    if (errUpdate) {
+      return res.status(500).json({ error: errUpdate.message });
+    }
 
-    res.json({ message: 'Pago exitoso', nuevoSaldo });
+    return res.json({ message: 'Pago registrado con éxito', nuevoSaldo });
   } catch (err) {
-    console.error('Error general en pago:', err);
-    res.status(500).json({ error: err.message || 'Error interno del servidor' });
+    return res.status(500).json({ error: err.message });
   }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Servidor en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor listo en puerto ${PORT}`));
