@@ -19,7 +19,7 @@ app.post('/api/clientes', async (req, res) => {
   const { nombre, monto, direccion, cobrador_id } = req.body;
   
   const { data, error } = await supabase
-    .from('Clientes')
+    .from('clientes')
     .insert([
       { 
         nombre: nombre, 
