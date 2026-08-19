@@ -14,18 +14,30 @@ app.get('/', (req, res) => {
   res.send('Backend NG504 activo');
 });
 
-// Guardar Cliente
-app.post('/api/Clientes', async (req, res) => {
-  const { nombre, monto, direccion, cobrador_id } = req.body;
-  
+// OBTENER CLIENTES (GET)
+app.get('/api/clientes', async (req, res) => {
+  const { data, error } = await supabase.from('Clientes').select('*');
+  if (error) {
+    console.error('Error Supabase:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  res.json(data);
+});
+
+// GUARDAR CLIENTE (POST)
+app.post('/api/clientes', async (req, res) => {
+  const { nombre, monto, direccion, cobrador_id, dias, porcentaje } = req.body;
+
   const { data, error } = await supabase
     .from('Clientes')
     .insert([
       { 
-        nombre: nombre, 
-        monto: monto, 
-        direccion: direccion, 
-        cobrador_id: cobrador_id 
+        nombre, 
+        monto, 
+        direccion, 
+        cobrador_id,
+        dias: dias || null,
+        porcentaje: porcentaje || null
       }
     ]);
 
@@ -34,8 +46,10 @@ app.post('/api/Clientes', async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 
-  res.json({ message: 'Cliente guardado con éxito', data });
+  res.json({ message: 'Cliente guardado', data });
 });
 
-const port = process.env.PORT || 10000;
-app.listen(port, () => console.log(`Servidor en puerto ${port}`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Servidor en puerto ${PORT}`);
+});
