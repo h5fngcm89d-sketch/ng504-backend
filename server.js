@@ -14,12 +14,12 @@ app.get('/', (req, res) => {
   res.send('Backend NG504 activo');
 });
 
-// Guardar cliente
-app.post('/api/clientes', async (req, res) => {
+// Guardar Cliente
+app.post('/api/Clientes', async (req, res) => {
   const { nombre, monto, direccion, cobrador_id } = req.body;
   
   const { data, error } = await supabase
-    .from('clientes')
+    .from('Clientes')
     .insert([
       { 
         nombre: nombre, 
