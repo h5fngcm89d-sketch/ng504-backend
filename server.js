@@ -1,100 +1,126 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// CONFIGURACIÓN SUPABASE
-const SUPABASE_URL = process.env.SUPABASE_URL || 'TU_SUPABASE_URL';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'TU_SUPABASE_KEY';
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// 1. Conexión a MongoDB (Usa tu propia URI de MongoDB Atlas)
+const MONGO_URI = process.env.MONGO_URI || 'TU_MONGO_URI_AQUI';
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('✅ Conectado a MongoDB'))
+  .catch((err) => console.error('❌ Error conectando a MongoDB:', err));
 
-// REGLA FINANCIERA: Cálculo de fecha fin excluyendo domingos
-function calcularFechaFin(fechaInicio, cuotas, frecuencia) {
-  let fecha = new Date(fechaInicio);
-  if (frecuencia === 'SEMANAL') {
-    fecha.setDate(fecha.getDate() + (cuotas * 7));
-    return fecha.toISOString().split('T')[0];
-  }
-  
-  let cuotasContadas = 0;
-  while (cuotasContadas < cuotas) {
-    fecha.setDate(fecha.getDate() + 1);
-    if (fecha.getDay() !== 0) { // Excluir Domingos (0)
-      cuotasContadas++;
-    }
-  }
-  return fecha.toISOString().split('T')[0];
-}
+// 2. Modelo de Cliente
+const ClienteSchema = new mongoose.Schema({
+  nombre: { type: String, required: true },
+  direccion: { type: String, default: 'Sin Dirección' },
+  telefono: { type: String, default: 'N/A' },
+  saldo_pendiente: { type: Number, required: true },
+  valor_cuota: { type: Number, required: true },
+  dias_atrasado: { type: Number, default: 0 },
+  cobrador: { type: String, default: 'Felipe' },
+  cobrado_hoy: { type: Number, default: 0 },
+  estado_hoy: { type: String, default: 'PENDIENTE' } // 'PENDIENTE' o 'COBRADO'
+}, { timestamps: true });
 
-// 1. ENDPOINT: CREAR PRÉSTAMO CON REGLA SIN DOMINGOS
-app.post('/api/prestamos', async (req, res) => {
-  const { cliente_id, monto_prestado, interes_porcentaje, cantidad_cuotas, frecuencia, fecha_inicio } = req.body;
-  
-  const monto = Number(monto_prestado);
-  const interes = Number(interes_porcentaje);
-  const monto_total = monto + (monto * (interes / 100));
-  const valor_cuota = monto_total / Number(cantidad_cuotas);
-  const fecha_fin = calcularFechaFin(fecha_inicio, Number(cantidad_cuotas), frecuencia);
+const Cliente = mongoose.model('Cliente', ClienteSchema);
 
-  const { data, error } = await supabase.from('prestamos').insert([{
-    cliente_id,
-    monto_prestado: monto,
-    interes_porcentaje: interes,
-    monto_total,
-    cantidad_cuotas: Number(cantidad_cuotas),
-    frecuencia,
-    valor_cuota,
-    fecha_inicio,
-    fecha_fin,
-    estado: 'ACTIVO'
-  }]).select();
-
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data[0]);
+// 3. Modelo de Historial de Pagos (Auditoría)
+const PagoSchema = new mongoose.Schema({
+  clienteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Cliente', required: true },
+  clienteNombre: String,
+  cobrador: String,
+  monto: Number,
+  fecha: { type: Date, default: Date.now }
 });
 
-// 2. ENDPOINT: DASHBOARD GENERAL (ADMINISTRADOR)
-app.get('/api/dashboard', async (req, res) => {
-  const { data: prestamos } = await supabase.from('prestamos').select('*, pagos(*)');
-  const { data: gastos } = await supabase.from('gastos').select('*');
+const Pago = mongoose.model('Pago', PagoSchema);
 
-  let capitalEnCalle = 0;
-  let cobradoHoy = 0;
-  let gananciaGenerada = 0;
-  let totalGastos = 0;
+// --- ENDPOINTS / RUTAS DE LA API ---
 
-  const hoyStr = new Date().toISOString().split('T')[0];
+// Obtener todos los clientes
+app.get('/api/clientes', async (req, res) => {
+  try {
+    const clientes = await Cliente.find().sort({ createdAt: -1 });
+    res.json(clientes);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener clientes' });
+  }
+});
 
-  prestamos?.forEach(p => {
-    const totalPagado = p.pagos?.reduce((acc, pago) => acc + Number(pago.monto_cobrado), 0) || 0;
-    const saldoPendiente = Math.max(0, Number(p.monto_total) - totalPagado);
-    capitalEnCalle += saldoPendiente;
+// Crear nuevo cliente
+app.post('/api/clientes', async (req, res) => {
+  try {
+    const nuevoCliente = new Cliente(req.body);
+    await nuevoCliente.save();
+    res.status(201).json(nuevoCliente);
+  } catch (error) {
+    res.status(400).json({ error: 'Error al crear cliente' });
+  }
+});
 
-    p.pagos?.forEach(pago => {
-      if (pago.fecha_pago.startsWith(hoyStr)) {
-        cobradoHoy += Number(pago.monto_cobrado);
-      }
+// Registrar cobro / abono (Bloquea el pago diario)
+app.put('/api/clientes/:id/cobrar', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { monto, cobrador } = req.body;
+    const pagoMonto = parseFloat(monto);
+
+    const cliente = await Cliente.findById(id);
+    if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+    cliente.saldo_pendiente = Math.max(0, cliente.saldo_pendiente - pagoMonto);
+    cliente.cobrado_hoy = (cliente.cobrado_hoy || 0) + pagoMonto;
+    cliente.estado_hoy = 'COBRADO';
+
+    await cliente.save();
+
+    // Guardar en el historial inalterable de pagos
+    const nuevoPago = new Pago({
+      clienteId: cliente._id,
+      clienteNombre: cliente.nombre,
+      cobrador: cobrador || cliente.cobrador,
+      monto: pagoMonto
     });
+    await nuevoPago.save();
 
-    const proporcionInteres = Number(p.interes_porcentaje) / (100 + Number(p.interes_porcentaje));
-    gananciaGenerada += (totalPagado * proporcionInteres);
-  });
-
-  gastos?.forEach(g => {
-    if (g.fecha.startsWith(hoyStr)) totalGastos += Number(g.monto);
-  });
-
-  res.json({
-    capitalEnCalle,
-    cobradoHoy,
-    gananciaGenerada,
-    gastosHoy: totalGastos,
-    cajaSaldo: cobradoHoy - totalGastos
-  });
+    res.json({ cliente, pago: nuevoPago });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al registrar el cobro' });
+  }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`NG504 Backend listo en puerto ${PORT}`));
+// Reasignar cobrador a cliente
+app.put('/api/clientes/:id/asignar', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cobrador } = req.body;
+
+    const cliente = await Cliente.findByIdAndUpdate(
+      id,
+      { cobrador },
+      { new: true }
+    );
+    res.json(cliente);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al reasignar cliente' });
+  }
+});
+
+// Reiniciar jornada diaria (Cierre de caja - pone todos los cobros en PENDIENTE)
+app.post('/api/cierre-diario/reiniciar', async (req, res) => {
+  try {
+    await Cliente.updateMany({}, {
+      cobrado_hoy: 0,
+      estado_hoy: 'PENDIENTE'
+    });
+    res.json({ mensaje: 'Jornada reiniciada con éxito' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al reiniciar la jornada' });
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`));
